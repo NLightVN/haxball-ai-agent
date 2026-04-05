@@ -20,7 +20,7 @@ MAX_HALF_WIDTH = 800.0   # Used for both width and height normalization
 # Velocity normalization
 MAX_SPEED = 15.0
 
-# Time normalization (in seconds, e.g., max 3 minutes = 180 seconds)
+# Time normalization (in seconds, e.g., max 6 minutes = 360 seconds)
 MAX_TIME = 360.0
 
 # Ball bounces normalization
@@ -84,6 +84,10 @@ class ObservationData:
     # Thông tin bóng
     ball: BallInfo
     
+    # Thông tin trò chơi
+    time_left: float                    # Thời gian còn lại (normalized, 0-1)
+    flag_overtime: float                # Flag: 1.0 nếu đang overtime, 0.0 nếu bình thường
+    
     def to_flat_array(self) -> np.ndarray:
         """Chuyển structured observation thành flat array cho neural network."""
         features = []
@@ -146,6 +150,10 @@ class ObservationData:
         # Normalize bounces by MAX_BOUNCES
         features.append(float(self.ball.bounces_left) / MAX_BOUNCES)
         
+        # Time info
+        features.append(self.time_left)     # Already normalized (0-1)
+        features.append(self.flag_overtime)  # Already binary (0.0 or 1.0)
+        
         return np.array(features, dtype=np.float32)
 
 
@@ -203,6 +211,8 @@ class ObservationProcessor:
         goal_pos_upper: float,
         half_width: float,
         half_height: float,
+        time_left: float,
+        flag_overtime: float,
     ) -> ObservationData:
         """
         Xây dựng structured ObservationData từ các thành phần riêng lẻ.
@@ -313,6 +323,8 @@ class ObservationProcessor:
             half_width=half_width / MAX_HALF_WIDTH,
             half_height=half_height / MAX_HALF_WIDTH,
             ball=ball_info,
+            time_left=time_left,
+            flag_overtime=flag_overtime,
         )
     
     @property
@@ -336,7 +348,10 @@ class ObservationProcessor:
         # Ball: 4 (pos_x, pos_y, vel_x, vel_y) + 1 (bounces)
         ball_dim = 5
         
-        total = agent_dim + teammates_dim + opponents_dim + goal_dim + field_dim + ball_dim
+        # Time: 2 (time_left, flag_overtime)
+        time_dim = 2
+        
+        total = agent_dim + teammates_dim + opponents_dim + goal_dim + field_dim + ball_dim + time_dim
         return total
         
     def process_obs(self, raw_obs: np.ndarray) -> np.ndarray:
@@ -575,6 +590,8 @@ obs_data = processor.create_observation_data(
     goal_pos_upper=85.0,
     half_width=368.0,
     half_height=171.0,
+    time_left=0.5,           # Normalized 0-1
+    flag_overtime=0.0,       # 0.0 bình thường, 1.0 overtime
 )
 
 # Xử lý thành flat array cho neural network
