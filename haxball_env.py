@@ -66,13 +66,14 @@ N_TM_SLOTS  = 4   # max teammate slots in obs
 N_OPP_SLOTS = 5   # max opponent slots in obs
 
 # obs layout:
-#   [0..3]  field constants   (4)
-#   [4..7]  agent ↔ ball      (4)
-#   [8..18] dynamic state     (11)
-#   [19..22] game state       (4) — includes ready_to_shot, time_speed
-#   [23..62] teammates ×4     (10 each)
-#   [63..112] opponents ×5     (10 each)
-OBS_DIM = 4 + 4 + 11 + 4 + N_TM_SLOTS * 10 + N_OPP_SLOTS * 10  # = 113
+#   [0..3]   field constants   (4)
+#   [4..7]   agent ↔ ball      (4)
+#   [8..18]  dynamic state     (11)
+#   [19..24] game state        (7) — time_remaining, possession, ready_to_shot, time_speed,
+#                                    goal_step, my_goals/goal_limit, opp_goals/goal_limit
+#   [25..64] teammates ×4     (10 each)
+#   [65..114] opponents ×5    (10 each)
+OBS_DIM = 4 + 4 + 11 + 7 + N_TM_SLOTS * 10 + N_OPP_SLOTS * 10  # = 116
 
  
 # HaxBall default spawn positions (pixel, centre-field = 0,0)
@@ -205,6 +206,7 @@ class HaxballEnv(gym.Env):
         spawn_mode     : str            = 'haxball',
         time_limit_min : int            = DEFAULT_TIME_MIN,
         ep_seconds     : Optional[float] = None,
+        goal_limit     : int            = 3,
         seed           : Optional[int]  = None,
     ):
         super().__init__()
@@ -215,6 +217,7 @@ class HaxballEnv(gym.Env):
         assert 0 < goal_y <= HH,           "goal_y phải trong khoảng (0, HH]"
         assert spawn_mode in ('haxball', 'random'), "spawn_mode phải là 'haxball' hoặc 'random'"
         assert 1 <= time_limit_min <= 6,   "time_limit_min phải trong [1, 6]"
+        assert goal_limit >= 1,             "goal_limit phải >= 1"
 
         self.n_per_team     = n_per_team
         self.HW             = float(HW)
@@ -222,6 +225,7 @@ class HaxballEnv(gym.Env):
         self.goal_y         = float(goal_y)
         self.spawn_mode     = spawn_mode
         self.time_limit_min = int(time_limit_min)
+        self.goal_limit     = int(goal_limit)
         self._rng           = np.random.default_rng(seed)
 
         # max_steps: ticks @ 60 Hz (không chia FRAME_SKIP)
@@ -255,6 +259,8 @@ class HaxballEnv(gym.Env):
         self.blue_players:  list[Disc]        = []   # BLUE: team_id=2, x>0 side
         self._poles:        list[Disc]        = []   # goal poles (rebuilt each reset)
         self.ready_to_shot_states: list[int]  = []   # Track ready_to_shot mode for each player
+        self.red_score:     int               = 0    # Tỷ số đội RED
+        self.blue_score:    int               = 0    # Tỷ số đội BLUE
 
     #  Public helpers 
     def set_field(self, HW: float, HH: float, goal_y: float) -> None:
@@ -281,6 +287,8 @@ class HaxballEnv(gym.Env):
         self._rebuild_poles()
         # Initialize ready_to_shot_states (0: idle, 1: ready_to_shot, 2: already_shot)
         self.ready_to_shot_states = [0] * self.n_agents
+        self.red_score  = 0
+        self.blue_score = 0
         obs = self._build_all_obs()
         return obs, {}
 
@@ -317,24 +325,38 @@ class HaxballEnv(gym.Env):
         terminated = False
 
         if goal_result == 1:     # RED ghi bàn → Blue goal bên phải
+            self.red_score += 1
             for i in range(n):
                 rewards[i]     = +1.0   # RED thưởng
             for i in range(n, n * 2):
                 rewards[i]     = -1.0   # BLUE phạt
-            terminated = True
+            if self.red_score >= self.goal_limit:
+                terminated = True
         elif goal_result == -1:  # BLUE ghi bàn → Red goal bên trái
+            self.blue_score += 1
             for i in range(n):
                 rewards[i]     = -1.0
             for i in range(n, n * 2):
                 rewards[i]     = +1.0
-            terminated = True
+            if self.blue_score >= self.goal_limit:
+                terminated = True
+
+        # Tự động đưa bóng về giữa sân nếu có bàn thắng và trận đấu chưa kết thúc
+        if goal_result != 0 and not terminated:
+            if self.spawn_mode == 'haxball':
+                self._spawn_haxball()
+            else:
+                self._spawn_random()
+            # Reset trạng thái kick sau khi có bàn thắng
+            self.ready_to_shot_states = [0] * self.n_agents
 
         truncated = False
         if not terminated and self.step_count >= self.max_steps:
             truncated = True
 
         obs = self._build_all_obs()
-        info = {'goal': goal_result, 'step': self.step_count}
+        info = {'goal': goal_result, 'step': self.step_count,
+                'red_score': self.red_score, 'blue_score': self.blue_score}
         return obs, rewards, terminated, truncated, info
 
     #  Spawn helpers 
@@ -632,13 +654,20 @@ class HaxballEnv(gym.Env):
         obs[i] = flip * (mxs - bxs) / MAX_SPEED;       i += 1
         obs[i] = (mys - bys) / MAX_SPEED;               i += 1
 
-        # Section 4 — Game state (4) including ready_to_shot and time_speed
+        # Section 4 — Game state (7) including ready_to_shot, time_speed, and scores
         obs[i] = max(0.0, 1.0 - self.step_count / max(1, self.max_steps)); i += 1
         obs[i] = 0.0;                       i += 1  # possession (TODO)
         # ready_to_shot flag (1.0 if in ready to shot mode, else 0.0)
         obs[i] = 1.0 if self.ready_to_shot_states[agent_idx] == 1 else 0.0; i += 1
-        # Tốc độ hết thời gian còn lại = TỔNG thời gian (phút) / 10
+        # Tổng thời gian trận (phút) / 10
         obs[i] = (self.ep_seconds / 60.0) / 10.0; i += 1
+        # Score features (normalized by goal_limit)
+        gl = float(self.goal_limit)
+        obs[i] = 1.0 / gl;                                                   i += 1  # goal_step
+        my_score  = float(self.red_score  if team_id == 1 else self.blue_score)
+        opp_score = float(self.blue_score if team_id == 1 else self.red_score)
+        obs[i] = my_score  / gl;                                             i += 1  # my_goals / goal_limit
+        obs[i] = opp_score / gl;                                             i += 1  # opp_goals / goal_limit
 
         # Section 5 — Teammates ×4 (9 features each)
         teammates = [p for p in (self.red_players if team_id == 1 else self.blue_players)

@@ -44,7 +44,6 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from observations import ObservationProcessor
 from PPO import PPOAgent, PPOConfig
 
 
@@ -191,7 +190,7 @@ class AgentPool:
     def _add_agent(self) -> int:
         """Thêm agent mới vào pool."""
         agent_id = self.agent_counter
-        obs_dim = 112  # TODO: Lấy từ ObservationProcessor.flat_obs_dim
+        obs_dim = 113  # Dựa trên OBS_DIM của haxball_env.py
         ppo_agent = PPOAgent(obs_dim, action_dim=9, config=self.ppo_config)
         
         stats = AgentStats(

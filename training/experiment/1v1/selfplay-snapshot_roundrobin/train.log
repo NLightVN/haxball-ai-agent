@@ -1,0 +1,17 @@
+2026-05-03 20:46:31,490 [INFO] [SnapshotPool] Snapshot #0 added. Pool size: 1
+2026-05-03 20:46:31,490 [INFO] OBS_DIM=116 | Device=cpu
+2026-05-03 20:46:31,490 [INFO] Initial snapshot added (random init). Training begins.
+2026-05-03 20:49:47,267 [INFO] Update    10 | DENSE+SPARSE | pool=  1 | matches=2 W=0 L=0 D=2 wr=0% | steps/tour=21600 | total=209,045 | 196s
+2026-05-03 20:53:13,910 [INFO] Update    20 | DENSE+SPARSE | pool=  1 | matches=2 W=0 L=0 D=2 wr=0% | steps/tour=21600 | total=425,045 | 402s
+2026-05-03 20:56:37,146 [INFO] Update    30 | DENSE+SPARSE | pool=  1 | matches=2 W=0 L=0 D=2 wr=0% | steps/tour=21600 | total=641,045 | 606s
+2026-05-03 21:00:11,241 [INFO] Update    40 | DENSE+SPARSE | pool=  1 | matches=2 W=0 L=0 D=2 wr=0% | steps/tour=21600 | total=857,045 | 820s
+2026-05-03 21:08:39,847 [INFO] [SnapshotPool] Snapshot #1 added. Pool size: 2
+2026-05-03 21:08:39,909 [INFO] Update    50 | DENSE+SPARSE | pool=  2 | matches=2 W=0 L=0 D=2 wr=0% | steps/tour=21600 | total=1,073,045 | 1328s
+2026-05-03 21:21:24,445 [INFO] Update    60 | DENSE+SPARSE | pool=  2 | matches=3 W=0 L=0 D=3 wr=0% | steps/tour=32400 | total=1,397,045 | 2093s
+2026-05-03 21:26:17,313 [INFO] Update    70 | DENSE+SPARSE | pool=  2 | matches=3 W=0 L=0 D=3 wr=0% | steps/tour=32400 | total=1,688,884 | 2386s
+2026-05-03 21:31:37,477 [INFO] Update    80 | DENSE+SPARSE | pool=  2 | matches=3 W=0 L=0 D=3 wr=0% | steps/tour=32400 | total=2,002,189 | 2706s
+2026-05-03 21:38:58,134 [INFO] Update    90 | DENSE+SPARSE | pool=  2 | matches=3 W=0 L=0 D=3 wr=0% | steps/tour=32400 | total=2,315,448 | 3147s
+2026-05-03 21:44:31,585 [INFO] [SnapshotPool] Snapshot #2 added. Pool size: 3
+2026-05-03 21:44:31,593 [INFO] Update   100 | DENSE+SPARSE | pool=  3 | matches=3 W=0 L=0 D=3 wr=0% | steps/tour=32400 | total=2,628,881 | 3480s
+2026-05-03 21:53:06,654 [INFO] Update   110 | DENSE+SPARSE | pool=  3 | matches=4 W=0 L=0 D=4 wr=0% | steps/tour=43200 | total=3,039,669 | 3995s
+2026-05-03 22:00:38,896 [INFO] Update   120 | DENSE+SPARSE | pool=  3 | matches=4 W=0 L=0 D=4 wr=0% | steps/tour=43200 | total=3,450,399 | 4447s

@@ -8,19 +8,20 @@ Không cần gõ menu tương tác.
 """
 
 from play import run, MAPS
+import os
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CẤU HÌNH MATCH
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Chế độ: '1v1' | '2v2' | '3v3' | '4v4'
-MODE = '2v2'
+MODE = '1v1'
 
 # Số người thật mỗi team (phần còn lại là bot)
 #   RED tối đa 3 người (WASD+Space, Arrows+RCtrl, Numpad)
 #   BLUE tối đa 2 người (TFGH+R, IJKL+U)
-RED_HUMANS  = 2
-BLUE_HUMANS = 1
+RED_HUMANS  = 1
+BLUE_HUMANS = 0
 
 # Số bàn thắng để kết thúc match (1–20)
 WIN_SCORE = 5
@@ -49,6 +50,14 @@ CUSTOM_MAP = None   # None = dùng preset; hoặc dict như bên dưới
 #  'random'  — random mỗi nửa sân; bóng cách đều red/blue gần nhất
 # ═══════════════════════════════════════════════════════════════════════════════
 SPAWN_MODE = 'haxball'
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  AI MODEL PATH
+#  Để None → dùng SimpleBot (chạy theo bóng)
+#  Để đường dẫn tới file .pt → tải mạng PPO đã train
+# ═══════════════════════════════════════════════════════════════════════════════
+# Ví dụ: MODEL_PATH = 'training/experiment/1v1/checkpoints/best_model.pt'
+MODEL_PATH = 'training\experiment\1v1\selfplay-snapshot_roundrobin\checkpoints\snapshot_000100.pt'
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  CONTROLS REFERENCE
@@ -104,4 +113,5 @@ if __name__ == '__main__':
         blue_humans    = BLUE_HUMANS,
         win_score      = WIN_SCORE,
         time_limit_min = TIME_LIMIT_MIN,
+        model_path     = MODEL_PATH,
     )

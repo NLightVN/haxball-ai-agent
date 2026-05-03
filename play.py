@@ -42,8 +42,20 @@ from haxball_env import (
     HaxballEnv, Disc, DIR_MAP,
     BALL_R, PLYR_R, KICK_RANGE,
     PLYR_ACC, PLYR_KICK_ACC, KICK_STR,
-    FRAME_SKIP,
+    FRAME_SKIP, OBS_DIM
 )
+
+# Thử import PPOAgent
+try:
+    import sys
+    import os
+    _HERE = os.path.dirname(os.path.abspath(__file__))
+    if _HERE not in sys.path:
+        sys.path.insert(0, _HERE)
+    from training.PPO import PPOAgent
+    PPO_AVAILABLE = True
+except ImportError:
+    PPO_AVAILABLE = False
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HaxMods map presets
@@ -193,6 +205,24 @@ class SimpleBot:
                     dir_idx = best_i
 
         return [dir_idx, kick]
+
+
+class PPOBot:
+    """
+    AI Bot dùng mạng neural PPO đã train.
+    """
+    def __init__(self, agent: 'PPOAgent', player_index_global: int):
+        self.agent = agent
+        self.player_index_global = player_index_global
+
+    def get_action(self, env: HaxballEnv) -> list[int]:
+        # Build obs cho tất cả các agent
+        obs_list = env._build_all_obs()
+        my_obs = obs_list[self.player_index_global]
+        
+        # PPO select_action trả về (move_idx, kick_idx, log_prob)
+        move, kick, _ = self.agent.select_action(my_obs, training=False)
+        return [move, kick]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -444,7 +474,7 @@ def _get_int(prompt: str, lo: int, hi: int, default: int) -> int:
 # Main game loop
 # ─────────────────────────────────────────────────────────────────────────────
 def run(mode: str, n: int, red_humans: int, blue_humans: int,
-        win_score: int, time_limit_min: int = 3):
+        win_score: int, time_limit_min: int = 3, model_path: Optional[str] = None):
     PLAY_SECONDS   = time_limit_min * 60
     PLAY_MAX_TICKS = PLAY_SECONDS * 60   # ticks @ 60 Hz
 
@@ -471,17 +501,45 @@ def run(mode: str, n: int, red_humans: int, blue_humans: int,
     agent_key_set:  list[Optional[tuple]] = []
     bots:           list[Optional[SimpleBot]] = []
 
+    # Load PPO Agent nếu được chỉ định
+    trained_agent = None
+    if model_path is not None:
+        if not PPO_AVAILABLE:
+            print("Cảnh báo: Không thể import PPOAgent. Sẽ dùng SimpleBot thay thế.")
+        else:
+            print(f"Đang tải AI Model từ: {model_path} ...")
+            try:
+                # OBS_DIM được import từ haxball_env
+                trained_agent = PPOAgent(obs_dim=OBS_DIM)
+                trained_agent.load_checkpoint(model_path)
+                print("Tải model thành công!")
+            except Exception as e:
+                print(f"Lỗi khi tải model: {e}. Sẽ dùng SimpleBot.")
+                trained_agent = None
+
     for i in range(n):  # RED
         is_h = i < red_humans and i < 3
         agent_is_human.append(is_h)
         agent_key_set.append(KEY_SETS[i] if is_h else None)
-        bots.append(None if is_h else SimpleBot(1, i, n))
+        if is_h:
+            bots.append(None)
+        else:
+            if trained_agent is not None:
+                bots.append(PPOBot(trained_agent, i))
+            else:
+                bots.append(SimpleBot(1, i, n))
 
     for i in range(n):  # BLUE
         is_h = i < blue_humans and i < 2  # max 2 BLUE humans (key sets 3,4)
         agent_is_human.append(is_h)
         agent_key_set.append(KEY_SETS[3 + i] if is_h else None)
-        bots.append(None if is_h else SimpleBot(2, i, n))
+        if is_h:
+            bots.append(None)
+        else:
+            if trained_agent is not None:
+                bots.append(PPOBot(trained_agent, n + i))
+            else:
+                bots.append(SimpleBot(2, i, n))
 
     mode_str = (f"RED: {red_humans} human + {n-red_humans} bot  |  "
                 f"BLUE: {blue_humans} human + {n-blue_humans} bot")
