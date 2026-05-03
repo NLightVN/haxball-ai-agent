@@ -69,10 +69,10 @@ N_OPP_SLOTS = 5   # max opponent slots in obs
 #   [0..3]  field constants   (4)
 #   [4..7]  agent ↔ ball      (4)
 #   [8..18] dynamic state     (11)
-#   [19..20] game state       (2)
-#   [21..57] teammates ×4     (9 each)
-#   [58..99] opponents ×5     (9 each)
-OBS_DIM = 4 + 4 + 11 + 2 + N_TM_SLOTS * 9 + N_OPP_SLOTS * 9  # = 84 (21 + 63 = 84 → padded to 100? match agent-api)
+#   [19..22] game state       (4) — includes ready_to_shot, time_speed
+#   [23..62] teammates ×4     (10 each)
+#   [63..112] opponents ×5     (10 each)
+OBS_DIM = 4 + 4 + 11 + 4 + N_TM_SLOTS * 10 + N_OPP_SLOTS * 10  # = 113
 
  
 # HaxBall default spawn positions (pixel, centre-field = 0,0)
@@ -110,7 +110,7 @@ DIR_MAP = np.array([
     [-1,  1],  # 8 down-left
 ], dtype=np.float64)
 
-FRAME_SKIP        = 6    # physics ticks per env step (RL training)
+FRAME_SKIP        = 3    # physics ticks per env step (RL training)
 PHYSICS_HZ        = 60
 DEFAULT_EP_S      = 15   # episode length in seconds (RL training shorthand)
 DEFAULT_TIME_MIN  = 3    # default match time limit (minutes, play mode)
@@ -254,6 +254,7 @@ class HaxballEnv(gym.Env):
         self.red_players:   list[Disc]        = []   # RED: team_id=1, x<0 side
         self.blue_players:  list[Disc]        = []   # BLUE: team_id=2, x>0 side
         self._poles:        list[Disc]        = []   # goal poles (rebuilt each reset)
+        self.ready_to_shot_states: list[int]  = []   # Track ready_to_shot mode for each player
 
     #  Public helpers 
     def set_field(self, HW: float, HH: float, goal_y: float) -> None:
@@ -278,6 +279,8 @@ class HaxballEnv(gym.Env):
             self._spawn_random()
 
         self._rebuild_poles()
+        # Initialize ready_to_shot_states (0: idle, 1: ready_to_shot, 2: already_shot)
+        self.ready_to_shot_states = [0] * self.n_agents
         obs = self._build_all_obs()
         return obs, {}
 
@@ -436,6 +439,8 @@ class HaxballEnv(gym.Env):
     def _tick(self, actions: list) -> int:
         """
         Một physics tick.
+        Args:
+            actions: list of [dir_idx, kick] for each agent
         Returns: 0=bình thường, 1=RED ghi bàn (Blue goal bên phải), -1=BLUE ghi bàn.
         """
         ball   = self.ball
@@ -444,25 +449,47 @@ class HaxballEnv(gym.Env):
         gy     = self.goal_y
 
         all_players = self.red_players + self.blue_players
-
+        
         #  1. Kick & Acceleration 
         for i, ag in enumerate(all_players):
             dir_idx = int(actions[i][0])
             kick    = int(actions[i][1])
             dx, dy  = DIR_MAP[dir_idx]
 
+            # Logic ready to shot
+            # states: 0: idle, 1: ready_to_shot, 2: already_shot
+            if kick == 0:
+                self.ready_to_shot_states[i] = 0
+                actually_kick = False
+                ready_to_shot = False
+            else:
+                if self.ready_to_shot_states[i] == 0:
+                    self.ready_to_shot_states[i] = 1
+                
+                if self.ready_to_shot_states[i] == 1:
+                    actually_kick = True
+                    ready_to_shot = True
+                else: # State 2: already_shot
+                    actually_kick = False
+                    ready_to_shot = False
+
             # Kick: áp impulse lên bóng nếu trong tầm
-            if kick:
+            if actually_kick:
                 dx_b  = ball.x - ag.x; dy_b = ball.y - ag.y
                 dist  = math.hypot(dx_b, dy_b)
                 if dist > 0 and dist - ag.radius - ball.radius < KICK_RANGE:
                     nx, ny = dx_b / dist, dy_b / dist
                     ball.xs += nx * KICK_STR
                     ball.ys += ny * KICK_STR
+                    # Nếu sút trúng bóng thì chuyển sang trạng thái đã sút (ngắt ready to shot)
+                    self.ready_to_shot_states[i] = 2
 
             # Acceleration
             ln  = math.hypot(dx, dy)
-            acc = PLYR_KICK_ACC if kick else PLYR_ACC
+            # Chỉ đi chậm (bằng tốc độ sút) nếu đang ở chế độ ready_to_shot (trạng thái 1)
+            # Hoặc vừa mới sút xong nhưng vẫn giữ phím sút thì tốc độ trở lại bình thường
+            acc = PLYR_KICK_ACC if ready_to_shot else PLYR_ACC
+            
             if ln > 0:
                 ndx, ndy = dx / ln, dy / ln
                 ag.xs += ndx * acc
@@ -545,14 +572,14 @@ class HaxballEnv(gym.Env):
         """Xây dựng obs cho tất cả n_agents (RED trước, BLUE sau)."""
         obs_list = []
         # RED agents (team_id=1, flip=+1)
-        for ag in self.red_players:
-            obs_list.append(self._get_obs_for(ag, team_id=1))
+        for agent_idx, ag in enumerate(self.red_players):
+            obs_list.append(self._get_obs_for(ag, team_id=1, agent_idx=agent_idx))
         # BLUE agents (team_id=2, flip=-1)
-        for ag in self.blue_players:
-            obs_list.append(self._get_obs_for(ag, team_id=2))
+        for agent_idx, ag in enumerate(self.blue_players):
+            obs_list.append(self._get_obs_for(ag, team_id=2, agent_idx=self.n_per_team + agent_idx))
         return obs_list
 
-    def _get_obs_for(self, agent: Disc, team_id: int) -> np.ndarray:
+    def _get_obs_for(self, agent: Disc, team_id: int, agent_idx: int = 0) -> np.ndarray:
         """
         Build observation vector cho một agent.
 
@@ -561,11 +588,11 @@ class HaxballEnv(gym.Env):
 
         Layout:
           [0..3]   Field constants : goal_y/N, HH/N, HW/N, team_flag
-          [4..7]   Agent↔Ball      : d_bx/N, d_by/N, surf_dist/DIAG, can_kick
+          [4..7]   Agent↔Ball      : d_bx/N, d_by/N, surf_dist/DIAG, kick_margin
           [8..18]  Dynamic state   : bx,by,bxs,bys, mx,my,mxs,mys, speed, rvx,rvy
-          [19..20] Game state      : time_remaining, possession (0 nếu ko có opp)
-          [21..57] Teammates×4     : (x,y,xs,ys,d_me_x,d_me_y,d_ball_x,d_ball_y,dist_ball) ×4
-          [58..99] Opponents×5     : same layout ×5
+          [19..22] Game state      : time_remaining, possession, ready_to_shot, time_speed
+          [23..62] Teammates×4     : (x,y,xs,ys,d_me_x,d_me_y,d_ball_x,d_ball_y,dist_ball,kick_margin) ×4
+          [63..112] Opponents×5    : same layout ×5
         """
         obs  = np.zeros(OBS_DIM, dtype=np.float32)
         ball = self.ball
@@ -577,7 +604,6 @@ class HaxballEnv(gym.Env):
         mxs, mys = agent.xs, agent.ys
 
         surf_dist = max(0.0, math.hypot(mx - bx, my - by) - PLYR_R - BALL_R)
-        can_kick  = 1.0 if surf_dist < KICK_RANGE else 0.0
 
         i = 0
 
@@ -591,7 +617,7 @@ class HaxballEnv(gym.Env):
         obs[i] = flip * (bx - mx) / NORM;  i += 1
         obs[i] = (by - my) / NORM;         i += 1
         obs[i] = surf_dist / DIAG;         i += 1
-        obs[i] = can_kick;                 i += 1
+        obs[i] = (surf_dist - KICK_RANGE) / DIAG; i += 1
 
         # Section 3 — Dynamic state (11)
         obs[i] = flip * bx  / NORM;         i += 1
@@ -606,9 +632,13 @@ class HaxballEnv(gym.Env):
         obs[i] = flip * (mxs - bxs) / MAX_SPEED;       i += 1
         obs[i] = (mys - bys) / MAX_SPEED;               i += 1
 
-        # Section 4 — Game state (2)
+        # Section 4 — Game state (4) including ready_to_shot and time_speed
         obs[i] = max(0.0, 1.0 - self.step_count / max(1, self.max_steps)); i += 1
         obs[i] = 0.0;                       i += 1  # possession (TODO)
+        # ready_to_shot flag (1.0 if in ready to shot mode, else 0.0)
+        obs[i] = 1.0 if self.ready_to_shot_states[agent_idx] == 1 else 0.0; i += 1
+        # Tốc độ hết thời gian còn lại = TỔNG thời gian (phút) / 10
+        obs[i] = (self.ep_seconds / 60.0) / 10.0; i += 1
 
         # Section 5 — Teammates ×4 (9 features each)
         teammates = [p for p in (self.red_players if team_id == 1 else self.blue_players)
@@ -626,8 +656,9 @@ class HaxballEnv(gym.Env):
                 obs[i]   = (by - t.y) / NORM;                          i += 1
                 t_surf   = max(0.0, math.hypot(t.x-bx, t.y-by) - PLYR_R - BALL_R)
                 obs[i]   = t_surf / DIAG;                               i += 1
+                obs[i]   = (t_surf - KICK_RANGE) / DIAG;                i += 1
             else:
-                i += 9  # zero-padded
+                i += 10  # zero-padded
 
         # Section 6 — Opponents ×5 (9 features each)
         opponents = self.blue_players if team_id == 1 else self.red_players
@@ -644,8 +675,9 @@ class HaxballEnv(gym.Env):
                 obs[i]   = (by - o.y) / NORM;                           i += 1
                 o_surf   = max(0.0, math.hypot(o.x-bx, o.y-by) - PLYR_R - BALL_R)
                 obs[i]   = o_surf / DIAG;                                i += 1
+                obs[i]   = (o_surf - KICK_RANGE) / DIAG;                 i += 1
             else:
-                i += 9  # zero-padded
+                i += 10  # zero-padded
 
         assert i == OBS_DIM, f"Obs pointer mismatch: got {i}, expected {OBS_DIM}"
         return obs

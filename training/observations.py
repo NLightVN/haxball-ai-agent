@@ -23,8 +23,7 @@ MAX_SPEED = 15.0
 # Time normalization (in seconds, e.g., max 6 minutes = 360 seconds)
 MAX_TIME = 360.0
 
-# Ball bounces normalization
-MAX_BOUNCES = 4
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -36,7 +35,6 @@ class PlayerInfo(NamedTuple):
     pos_normalized: np.ndarray          # Vị trí chuẩn (-1 to 1)
     pos_relative_ball: np.ndarray       # Vị trí tương đối với bóng
     dist_to_ball: float                 # Khoảng cách tới bóng
-    can_shoot: bool                     # Flag: có thể sút bóng không
     velocity: np.ndarray                # Tốc độ player (vx, vy)
 
 
@@ -44,7 +42,6 @@ class BallInfo(NamedTuple):
     """Thông tin về bóng."""
     pos: np.ndarray                     # Vị trí bóng (x, y)
     velocity: np.ndarray                # Tốc độ bóng (vx, vy)
-    bounces_left: int                   # Số lần đập còn lại
 
 
 class GoalInfo(NamedTuple):
@@ -86,7 +83,7 @@ class ObservationData:
     
     # Thông tin trò chơi
     time_left: float                    # Thời gian còn lại (normalized, 0-1)
-    flag_overtime: float                # Flag: 1.0 nếu đang overtime, 0.0 nếu bình thường
+    total_time: float                   # Tổng thời gian cả trận (phút / 10)
     
     def to_flat_array(self) -> np.ndarray:
         """Chuyển structured observation thành flat array cho neural network."""
@@ -94,7 +91,6 @@ class ObservationData:
         
         # Agent info (values already normalized in create_observation_data)
         features.extend([self.agent.pos_normalized[0], self.agent.pos_normalized[1]])
-        features.append(1.0 if self.agent.can_shoot else 0.0)
         features.extend(self.agent.velocity)  # Already normalized by MAX_SPEED
         features.append(self.agent.dist_to_ball)  # Already normalized by MAX_HALF_WIDTH
         features.extend(self.agent.pos_relative_ball)  # Vector từ agent tới ball (normalized)
@@ -105,25 +101,23 @@ class ObservationData:
             if i < len(self.teammates):
                 tm = self.teammates[i]
                 features.extend(tm.pos_normalized)
-                features.append(1.0 if tm.can_shoot else 0.0)
                 features.extend(tm.velocity)  # Already normalized by MAX_SPEED
                 features.append(tm.dist_to_ball)  # Already normalized by MAX_HALF_WIDTH
                 features.extend(tm.pos_relative_ball)  # Vector từ teammate tới ball (normalized)
             else:
-                features.extend([0.0] * 9)  # 2 + 1 + 2 + 2 + 2
+                features.extend([0.0] * 8)  # 2 + 2 + 1 + 2 (pos, vel, dist, rel) + 1 (kick_margin if added but not here)
         
-        # Opponents (max 3, already normalized)
-        max_opponents = 3
+        # Opponents (max 4, already normalized)
+        max_opponents = 4
         for i in range(max_opponents):
             if i < len(self.opponents):
                 opp = self.opponents[i]
                 features.extend(opp.pos_normalized)
-                features.append(1.0 if opp.can_shoot else 0.0)
                 features.extend(opp.velocity)  # Already normalized by MAX_SPEED
                 features.append(opp.dist_to_ball)  # Already normalized by MAX_HALF_WIDTH
                 features.extend(opp.pos_relative_ball)  # Vector từ opponent tới ball (normalized)
             else:
-                features.extend([0.0] * 9)
+                features.extend([0.0] * 8)
         
         # Goal info (already normalized by MAX_HALF_WIDTH in create_observation_data)
         # Goal positions
@@ -147,12 +141,10 @@ class ObservationData:
         # Ball info (already normalized)
         features.extend(self.ball.pos)  # Already normalized by MAX_HALF_WIDTH
         features.extend(self.ball.velocity)  # Already normalized by MAX_SPEED
-        # Normalize bounces by MAX_BOUNCES
-        features.append(float(self.ball.bounces_left) / MAX_BOUNCES)
         
         # Time info
         features.append(self.time_left)     # Already normalized (0-1)
-        features.append(self.flag_overtime)  # Already binary (0.0 or 1.0)
+        features.append(self.total_time)    # Total match time (minutes / 10)
         
         return np.array(features, dtype=np.float32)
 
@@ -197,22 +189,18 @@ class ObservationProcessor:
         self,
         agent_pos: np.ndarray,
         agent_vel: np.ndarray,
-        agent_can_shoot: bool,
         teammates_pos: List[np.ndarray],
         teammates_vel: List[np.ndarray],
-        teammates_can_shoot: List[bool],
         opponents_pos: List[np.ndarray],
         opponents_vel: List[np.ndarray],
-        opponents_can_shoot: List[bool],
         ball_pos: np.ndarray,
         ball_vel: np.ndarray,
-        ball_bounces: int,
         goal_pos_lower: float,
         goal_pos_upper: float,
         half_width: float,
         half_height: float,
         time_left: float,
-        flag_overtime: float,
+        total_time_minutes: float,
     ) -> ObservationData:
         """
         Xây dựng structured ObservationData từ các thành phần riêng lẻ.
@@ -223,9 +211,10 @@ class ObservationProcessor:
             teammates_pos, teammates_vel, teammates_can_shoot: Danh sách đồng đội
             opponents_pos, opponents_vel, opponents_can_shoot: Danh sách đối thủ
             ball_pos, ball_vel: Vị trí & vận tốc bóng
-            ball_bounces: Số lần đập còn lại
             goal_pos_lower, goal_pos_upper: Y-position của cột gôn
             half_width, half_height: Kích thước sân
+            time_left: Thời gian còn lại (normalized 0-1)
+            total_time_minutes: Tổng thời gian cả trận (phút)
         
         Ra: ObservationData structured
         """
@@ -243,13 +232,12 @@ class ObservationProcessor:
             pos_normalized=agent_pos_norm,
             pos_relative_ball=(agent_pos - ball_pos) / MAX_HALF_WIDTH,
             dist_to_ball=np.linalg.norm(agent_pos - ball_pos) / MAX_HALF_WIDTH,
-            can_shoot=agent_can_shoot,
             velocity=agent_vel_norm
         )
         
         # Teammates info
         teammates = []
-        for tm_pos, tm_vel, tm_shoot in zip(teammates_pos, teammates_vel, teammates_can_shoot):
+        for tm_pos, tm_vel in zip(teammates_pos, teammates_vel):
             tm_pos_norm = np.array([
                 tm_pos[0] / MAX_HALF_WIDTH,
                 tm_pos[1] / MAX_HALF_WIDTH
@@ -259,13 +247,12 @@ class ObservationProcessor:
                 pos_normalized=tm_pos_norm,
                 pos_relative_ball=(tm_pos - ball_pos) / MAX_HALF_WIDTH,
                 dist_to_ball=np.linalg.norm(tm_pos - ball_pos) / MAX_HALF_WIDTH,
-                can_shoot=tm_shoot,
                 velocity=tm_vel_norm
             ))
         
         # Opponents info
         opponents = []
-        for opp_pos, opp_vel, opp_shoot in zip(opponents_pos, opponents_vel, opponents_can_shoot):
+        for opp_pos, opp_vel in zip(opponents_pos, opponents_vel):
             opp_pos_norm = np.array([
                 opp_pos[0] / MAX_HALF_WIDTH,
                 opp_pos[1] / MAX_HALF_WIDTH
@@ -275,7 +262,6 @@ class ObservationProcessor:
                 pos_normalized=opp_pos_norm,
                 pos_relative_ball=(opp_pos - ball_pos) / MAX_HALF_WIDTH,
                 dist_to_ball=np.linalg.norm(opp_pos - ball_pos) / MAX_HALF_WIDTH,
-                can_shoot=opp_shoot,
                 velocity=opp_vel_norm
             ))
         
@@ -311,8 +297,7 @@ class ObservationProcessor:
         # Ball info
         ball_info = BallInfo(
             pos=ball_pos / MAX_HALF_WIDTH,
-            velocity=ball_vel / MAX_SPEED,
-            bounces_left=ball_bounces
+            velocity=ball_vel / MAX_SPEED
         )
         
         return ObservationData(
@@ -324,20 +309,20 @@ class ObservationProcessor:
             half_height=half_height / MAX_HALF_WIDTH,
             ball=ball_info,
             time_left=time_left,
-            flag_overtime=flag_overtime,
+            total_time=total_time_minutes / 10.0,
         )
     
     @property
     def flat_obs_dim(self) -> int:
         """Tính toán kích thước flat observation vector."""
-        # Agent: 6 (pos_x, pos_y, can_shoot, vel_x, vel_y, dist) + 2 (vector_to_ball_x, vector_to_ball_y)
-        agent_dim = 8
+        # Agent: 5 (pos_x, pos_y, vel_x, vel_y, dist) + 2 (vector_to_ball_x, vector_to_ball_y)
+        agent_dim = 7
         
-        # Teammates: 3 x 9 (pos_x, pos_y, can_shoot, vel_x, vel_y, dist_to_ball, vec_to_ball_x, vec_to_ball_y)
-        teammates_dim = 3 * 9
+        # Teammates: 3 x 8 (pos_x, pos_y, vel_x, vel_y, dist_to_ball, vec_to_ball_x, vec_to_ball_y)
+        teammates_dim = 3 * 8
         
-        # Opponents: 3 x 9 (same as teammates)
-        opponents_dim = 3 * 9
+        # Opponents: 4 x 8 (same as teammates but for 4 players)
+        opponents_dim = 4 * 8
         
         # Goal: 2 (positions) + 8 (4 goal vectors to ball x 2 dims each) + 8 (4 goal vectors to agent x 2 dims each)
         goal_dim = 2 + 8 + 8
@@ -345,10 +330,10 @@ class ObservationProcessor:
         # Field: 2 (half_width, half_height)
         field_dim = 2
         
-        # Ball: 4 (pos_x, pos_y, vel_x, vel_y) + 1 (bounces)
-        ball_dim = 5
+        # Ball: 4 (pos_x, pos_y, vel_x, vel_y)
+        ball_dim = 4
         
-        # Time: 2 (time_left, flag_overtime)
+        # Time: 2 (time_left, total_time)
         time_dim = 2
         
         total = agent_dim + teammates_dim + opponents_dim + goal_dim + field_dim + ball_dim + time_dim
@@ -576,22 +561,18 @@ processor = ObservationProcessor(n_per_team=2)
 obs_data = processor.create_observation_data(
     agent_pos=np.array([10.0, 5.0]),
     agent_vel=np.array([1.0, 0.5]),
-    agent_can_shoot=True,
     teammates_pos=[np.array([15.0, 0.0])],
     teammates_vel=[np.array([0.5, 0.2])],
-    teammates_can_shoot=[False],
     opponents_pos=[np.array([-10.0, 5.0]), np.array([-15.0, -3.0])],
     opponents_vel=[np.array([-1.0, -0.5]), np.array([0.0, 0.0])],
-    opponents_can_shoot=[True, False],
     ball_pos=np.array([0.0, 0.0]),
     ball_vel=np.array([0.1, 0.2]),
-    ball_bounces=5,
     goal_pos_lower=-85.0,
     goal_pos_upper=85.0,
     half_width=368.0,
     half_height=171.0,
     time_left=0.5,           # Normalized 0-1
-    flag_overtime=0.0,       # 0.0 bình thường, 1.0 overtime
+    total_time_minutes=6.0,  # 6 phút / 10 = 0.6
 )
 
 # Xử lý thành flat array cho neural network

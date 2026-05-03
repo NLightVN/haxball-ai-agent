@@ -17,7 +17,45 @@ training/
 
 ## Các Thành Phần Chính
 
-### 1. **observations.py** - Xử Lý Observations
+### 1. **Cấu trúc Raw Observation (OBS_DIM = 104)**
+
+`HaxballEnv` trả về cho mỗi agent một mảng numpy 1D có 104 chiều (tất cả các giá trị đều đã được chuẩn hóa về `[-1, 1]` hoặc `[0, 1]`) với các section sau:
+
+1. **Thông tin sân (4 biến - Indices `[0..3]`)**
+   - `[0]` Chiều cao cột gôn `goal_y`
+   - `[1]` Nửa chiều dài sân dọc `HH`
+   - `[2]` Nửa chiều rộng sân ngang `HW`
+   - `[3]` Nhận diện phe (0.0: RED, 1.0: BLUE)
+
+2. **Cầu thủ ↔ Bóng (4 biến - Indices `[4..7]`)**
+   - `[4]` Khoảng cách x (tương đối) tới bóng
+   - `[5]` Khoảng cách y (tương đối) tới bóng
+   - `[6]` Khoảng cách bề mặt (đã trừ hitbox hình tròn) từ cầu thủ tới bóng
+   - `[7]` Flag sút (`can_kick`): 1.0 nếu nằm trong cự li sút, 0.0 nếu không
+
+3. **Trạng thái Động (11 biến - Indices `[8..18]`)**
+   - `[8..9]` Tọa độ bóng: `bx`, `by`
+   - `[10..11]` Vận tốc bóng: `bxs`, `bys`
+   - `[12..13]` Tọa độ bản thân: `mx`, `my`
+   - `[14..15]` Vận tốc bản thân: `mxs`, `mys`
+   - `[16]` Tốc độ tuyệt đối bản thân
+   - `[17..18]` Chênh lệch vận tốc x, y giữa bản thân và bóng
+
+4. **Trạng thái Game (4 biến - Indices `[19..22]`)**
+   - `[19]` Thời gian còn lại (chạy từ 1.0 về 0.0)
+   - `[20]` Tỉ lệ kiểm soát bóng (possession)
+   - `[21]` `ready_to_shot`: 1.0 nếu đang giữ space (đi chậm lại chờ sút), 0.0 nếu đi bình thường
+   - `[22]` `time_speed`: Tốc độ hết thời gian = (Tổng thời gian(phút) / 10)
+
+5. **Đồng đội - Max 4 người (36 biến - Indices `[23..58]`)**
+   - Mỗi người 9 biến: `x, y, xs, ys` (tọa độ/vận tốc), khoảng cách `x, y` đến mình, khoảng cách `x, y` đến bóng, và khoảng cách bề mặt tới bóng. Chỗ trống được pad bằng 0.
+
+6. **Đối thủ - Max 5 người (45 biến - Indices `[59..103]`)**
+   - Mỗi người 9 biến: Format y hệt phần Đồng đội.
+
+*(Lưu ý: Mọi thông số trục `x` đã được mô trường tự động suy chiếu (flip) cho team BLUE để đảm bảo góc nhìn tấn công "từ trái sang phải" là đồng nhất cho cả 2 phe, giúp model dùng chung policy)*
+
+### 2. **observations.py** - Xử Lý Observations Tầng Cao
 
 **Structured ObservationData:**
 Framework cấu trúc observation giúp dễ quản lý và mở rộng. Bao gồm:
@@ -57,7 +95,7 @@ raw_obs = env.get_observation(agent_id)  # shape (110,)
 processed = processor.process_obs(raw_obs)  # normalized & featured
 ```
 
-### 2. **PPO.py** - Thuật Toán PPO
+### 3. **PPO.py** - Thuật Toán PPO
 
 **ActorCriticNetwork**: Mạng MLP gồm:
 - Backbone chia sẻ: trích feature từ observation
@@ -107,7 +145,7 @@ agent.record_step(obs, (action, kick), reward, done)
 agent.update()
 ```
 
-### 3. **train.py** - Training Loop
+### 4. **train.py** - Training Loop
 
 *File này sẽ được tạo sau, bào gồm:*
 - Thu thập experience từ environment
